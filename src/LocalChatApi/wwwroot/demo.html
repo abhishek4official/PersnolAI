@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalChat API Demo - Intent-Driven Workflow Testing</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2196F3, #21CBF3);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .workflow-section {
+            padding: 30px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .workflow-section:last-child {
+            border-bottom: none;
+        }
+
+        .workflow-title {
+            color: #333;
+            font-size: 1.8em;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+
+        .workflow-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .step1 { background: #4CAF50; }
+        .step2 { background: #FF9800; }
+        .step3 { background: #9C27B0; }
+
+        .description {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        input[type="text"], textarea, input[type="file"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus, textarea:focus {
+            outline: none;
+            border-color: #2196F3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #2196F3, #21CBF3);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(33, 150, 243, 0.3);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .response-area {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            min-height: 100px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            overflow-x: auto;
+        }
+
+        .success {
+            background: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+
+        .error {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #2196F3;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .session-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #bbdefb;
+        }
+
+        .session-info strong {
+            color: #1976d2;
+        }
+
+        .file-id-display {
+            background: #fff3e0;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ffcc02;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            color: #f57c00;
+        }
+
+        .example-queries {
+            background: #f0f4ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+
+        .example-queries h4 {
+            color: #2196F3;
+            margin-bottom: 10px;
+        }
+
+        .example-queries ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+
+        .example-queries li {
+            background: white;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            border: 1px solid #e0e7ff;
+        }
+
+        .example-queries li:hover {
+            background: #e0e7ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 LocalChat API Demo</h1>
+            <p>Intent-Driven Workflow Testing Platform</p>
+            <p><strong>SemanticKernel.Ollama + ElsaWorkflowAgent + MongoDB</strong></p>
+        </div>
+
+        <!-- Session Information -->
+        <div class="workflow-section">
+            <div class="session-info">
+                <strong>Current Session ID:</strong> <span id="sessionId">Not set</span>
+                <button onclick="generateNewSession()" style="margin-left: 15px; padding: 5px 15px; font-size: 14px;">New Session</button>
+            </div>
+        </div>
+
+        <!-- Step 1: Intent Detection & Chat -->
+        <div class="workflow-section">
+            <div class="workflow-title">
+                <div class="workflow-icon step1">1</div>
+                Step 1: Intent Detection & Chat
+            </div>
+            <div class="description">
+                <strong>Workflow:</strong> User Input → Intent Recognition → Chat Agent (SemanticKernel.Ollama) → Response
+                <br><strong>Tests:</strong> Normal conversation, upload intent detection, file chat intent detection
+            </div>
+
+            <div class="form-group">
+                <label for="chatInput">Enter your message:</label>
+                <textarea id="chatInput" placeholder="Try: 'Hello, how are you?', 'I want to upload a file', or 'Ask about file ID: 12345'"></textarea>
+            </div>
+
+            <div class="example-queries">
+                <h4>💡 Example Queries (click to use):</h4>
+                <ul>
+                    <li onclick="setChatInput('Hello! How can you help me today?')">Normal Chat: "Hello! How can you help me today?"</li>
+                    <li onclick="setChatInput('I want to upload a document for analysis')">Upload Intent: "I want to upload a document for analysis"</li>
+                    <li onclick="setChatInput('Can you help me with file ID: 12345?')">File Chat Intent: "Can you help me with file ID: 12345?"</li>
+                    <li onclick="setChatInput('What is the meaning of life?')">Philosophical: "What is the meaning of life?"</li>
+                    <li onclick="setChatInput('Attach a PDF file please')">Upload Trigger: "Attach a PDF file please"</li>
+                </ul>
+            </div>
+
+            <button onclick="sendChatMessage()">🚀 Send Message</button>
+            <div id="chatResponse" class="response-area"></div>
+        </div>
+
+        <!-- Step 2: File Upload Flow -->
+        <div class="workflow-section">
+            <div class="workflow-title">
+                <div class="workflow-icon step2">2</div>
+                Step 2: File Upload & Processing
+            </div>
+            <div class="description">
+                <strong>Workflow:</strong> File Upload → File Reader → Data Extraction → Chunking & Embedding → MongoDB Storage
+                <br><strong>Result:</strong> Unique File ID for later RAG queries
+            </div>
+
+            <div class="form-group">
+                <label for="fileInput">Select a file to upload:</label>
+                <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.doc,.xlsx,.xls,.csv,.json,.xml,.html,.htm,.log,.rtf,.cs,.js,.ts,.py,.java,.cpp,.c,.h,.css,.sql">
+                <div style="margin-top: 8px; font-size: 12px; color: #666;">
+                    <strong>Supported formats:</strong><br>
+                    📄 <strong>Documents:</strong> PDF, Word (.docx, .doc), RTF<br>
+                    📊 <strong>Spreadsheets:</strong> Excel (.xlsx, .xls), CSV<br>
+                    📝 <strong>Text Files:</strong> TXT, Markdown (.md), JSON, XML, HTML, Log files<br>
+                    💻 <strong>Code Files:</strong> C#, JavaScript, TypeScript, Python, Java, C/C++, CSS, SQL
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="fileDescription">File Description (optional):</label>
+                <input type="text" id="fileDescription" placeholder="Brief description of the file content">
+            </div>
+
+            <button onclick="uploadFile()">📁 Upload & Process File</button>
+            <div id="uploadResponse" class="response-area"></div>
+            <div id="fileIdDisplay" class="file-id-display" style="display: none;">
+                <strong>📋 File ID:</strong> <span id="generatedFileId"></span>
+                <button onclick="copyFileId()" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">Copy</button>
+            </div>
+        </div>
+
+        <!-- Step 3: File Chat Flow (RAG) -->
+        <div class="workflow-section">
+            <div class="workflow-title">
+                <div class="workflow-icon step3">3</div>
+                Step 3: File Chat (RAG)
+            </div>
+            <div class="description">
+                <strong>Workflow:</strong> Question + File ID → Retrieve Embeddings → RAG with SemanticKernel.Ollama → Response
+                <br><strong>Features:</strong> Vector similarity search, contextual answers based on uploaded content
+            </div>
+
+            <div class="form-group">
+                <label for="fileIdInput">File ID (from Step 2):</label>
+                <input type="text" id="fileIdInput" placeholder="Enter the File ID from upload step">
+            </div>
+
+            <div class="form-group">
+                <label for="fileChatInput">Your question about the file:</label>
+                <textarea id="fileChatInput" placeholder="What would you like to know about the uploaded file?"></textarea>
+            </div>
+
+            <div class="example-queries">
+                <h4>💡 Example Questions (click to use):</h4>
+                <ul>
+                    <li onclick="setFileChatInput('What is the main topic of this document?')">📄 "What is the main topic of this document?"</li>
+                    <li onclick="setFileChatInput('Can you summarize the key points?')">📝 "Can you summarize the key points?"</li>
+                    <li onclick="setFileChatInput('What are the important details mentioned?')">🔍 "What are the important details mentioned?"</li>
+                    <li onclick="setFileChatInput('Are there any specific recommendations in this file?')">💡 "Are there any specific recommendations in this file?"</li>
+                    <li onclick="setFileChatInput('What conclusions can be drawn from this content?')">🎯 "What conclusions can be drawn from this content?"</li>
+                </ul>
+            </div>
+
+            <button onclick="askAboutFile()">🧠 Ask About File</button>
+            <div id="fileChatResponse" class="response-area"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE_URL = 'https://localhost:7096/api/chat'; // Update this to match your API URL
+        let currentSessionId = generateSessionId();
+        let lastFileId = null;
+
+        // Initialize session
+        document.getElementById('sessionId').textContent = currentSessionId;
+
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        }
+
+        function generateNewSession() {
+            currentSessionId = generateSessionId();
+            document.getElementById('sessionId').textContent = currentSessionId;
+            clearAllResponses();
+        }
+
+        function clearAllResponses() {
+            document.getElementById('chatResponse').textContent = '';
+            document.getElementById('uploadResponse').textContent = '';
+            document.getElementById('fileChatResponse').textContent = '';
+            document.getElementById('fileIdDisplay').style.display = 'none';
+        }
+
+        function setChatInput(text) {
+            document.getElementById('chatInput').value = text;
+        }
+
+        function setFileChatInput(text) {
+            document.getElementById('fileChatInput').value = text;
+        }
+
+        function copyFileId() {
+            const fileId = document.getElementById('generatedFileId').textContent;
+            navigator.clipboard.writeText(fileId).then(() => {
+                alert('File ID copied to clipboard!');
+            });
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = '<span class="loading"></span>Processing...';
+            element.className = 'response-area';
+        }
+
+        function showResponse(elementId, response, isError = false) {
+            const element = document.getElementById(elementId);
+            element.textContent = JSON.stringify(response, null, 2);
+            element.className = isError ? 'response-area error' : 'response-area success';
+        }
+
+        function showError(elementId, message) {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            element.className = 'response-area error';
+        }
+
+        // Step 1: Send Chat Message (Intent Detection)
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput').value.trim();
+            if (!input) {
+                alert('Please enter a message');
+                return;
+            }
+
+            showLoading('chatResponse');
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/message`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        input: input,
+                        sessionId: currentSessionId
+                    })
+                });
+
+                const result = await response.json();
+                showResponse('chatResponse', result, !response.ok);
+
+                // If the response contains intent information, display it prominently
+                if (result.data && result.data.intent) {
+                    const intentInfo = `\n\n🎯 DETECTED INTENT: ${result.data.intent.toUpperCase()}`;
+                    document.getElementById('chatResponse').textContent += intentInfo;
+                }
+
+            } catch (error) {
+                showError('chatResponse', `Network Error: ${error.message}`);
+            }
+        }
+
+        // Step 2: Upload File
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const description = document.getElementById('fileDescription').value;
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Please select a file');
+                return;
+            }
+
+            showLoading('uploadResponse');
+
+            try {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                formData.append('sessionId', currentSessionId);
+                if (description) {
+                    formData.append('description', description);
+                }
+
+                const response = await fetch(`${API_BASE_URL}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                showResponse('uploadResponse', result, !response.ok);
+
+                // Display File ID if upload was successful
+                if (result.success && result.data && result.data.fileId) {
+                    lastFileId = result.data.fileId;
+                    document.getElementById('generatedFileId').textContent = lastFileId;
+                    document.getElementById('fileIdDisplay').style.display = 'block';
+                    document.getElementById('fileIdInput').value = lastFileId;
+                }
+
+            } catch (error) {
+                showError('uploadResponse', `Network Error: ${error.message}`);
+            }
+        }
+
+        // Step 3: Ask About File (RAG)
+        async function askAboutFile() {
+            const fileId = document.getElementById('fileIdInput').value.trim();
+            const question = document.getElementById('fileChatInput').value.trim();
+
+            if (!fileId) {
+                alert('Please enter a File ID');
+                return;
+            }
+
+            if (!question) {
+                alert('Please enter a question');
+                return;
+            }
+
+            showLoading('fileChatResponse');
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/file-chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        fileId: fileId,
+                        question: question,
+                        sessionId: currentSessionId
+                    })
+                });
+
+                const result = await response.json();
+                showResponse('fileChatResponse', result, !response.ok);
+
+            } catch (error) {
+                showError('fileChatResponse', `Network Error: ${error.message}`);
+            }
+        }
+
+        // Auto-fill file ID when it's generated
+        window.addEventListener('DOMContentLoaded', function() {
+            // Auto-focus on first input
+            document.getElementById('chatInput').focus();
+        });
+    </script>
+</body>
+</html>
