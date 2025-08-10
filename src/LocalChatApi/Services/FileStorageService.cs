@@ -23,6 +23,7 @@ public interface IFileStorageService
     Task<List<FileDocument>> GetSessionFilesAsync(string sessionId);
     Task<bool> DeleteFileAsync(string fileId);
     Task<List<DocumentChunk>> SearchSimilarChunksAsync(string fileId, float[] queryEmbedding, int topK = 5);
+    Task<bool> UpdateFileChunksAsync(string fileId, List<DocumentChunk> chunks);
 }
 
 /// <summary>
@@ -463,23 +464,36 @@ public class MongoDbFileStorageService : IFileStorageService
     {
         try
         {
-            // For upsert operations, we need to handle the _id field properly
-            // If it's a new document (null, empty or invalid Id), let MongoDB generate the _id
-            if (string.IsNullOrEmpty(fileDoc.Id) || (fileDoc.Id.Length != 24 || !ObjectId.TryParse(fileDoc.Id, out _)))
-            {
-                // For new documents, set Id to null to let MongoDB generate it
-                fileDoc.Id = null;
-            }
+            // Check if a document with this FileId already exists
+            var existingDoc = await _filesCollection
+                .Find(x => x.FileId == fileDoc.FileId)
+                .FirstOrDefaultAsync();
 
-            // Use ReplaceOneAsync with upsert=true to handle both insert and update scenarios
-            var filter = Builders<FileDocument>.Filter.Eq(x => x.FileId, fileDoc.FileId);
-            var result = await _filesCollection.ReplaceOneAsync(
-                filter, 
-                fileDoc, 
-                new ReplaceOptions { IsUpsert = true });
+            if (existingDoc != null)
+            {
+                // Document exists - update it
+                fileDoc.Id = existingDoc.Id; // Keep the existing MongoDB _id
+                fileDoc.UpdatedAt = DateTime.UtcNow;
+                
+                var filter = Builders<FileDocument>.Filter.Eq(x => x.FileId, fileDoc.FileId);
+                var result = await _filesCollection.ReplaceOneAsync(filter, fileDoc);
+                
+                _logger.LogInformation("File metadata updated successfully: {FileId} (ModifiedCount: {ModifiedCount})", 
+                    fileDoc.FileId, result.ModifiedCount);
+            }
+            else
+            {
+                // New document - insert it (let MongoDB generate a new _id)
+                fileDoc.Id = null; // Ensure _id is null for new documents
+                fileDoc.CreatedAt = DateTime.UtcNow;
+                fileDoc.UpdatedAt = DateTime.UtcNow;
+                
+                await _filesCollection.InsertOneAsync(fileDoc);
+                
+                _logger.LogInformation("File metadata inserted successfully: {FileId} (Generated Id: {Id})", 
+                    fileDoc.FileId, fileDoc.Id);
+            }
             
-            _logger.LogInformation("File metadata saved successfully with ID: {FileId} (IsAcknowledged: {IsAcknowledged}, ModifiedCount: {ModifiedCount}, UpsertedId: {UpsertedId})", 
-                fileDoc.FileId, result.IsAcknowledged, result.ModifiedCount, result.UpsertedId);
             return fileDoc.FileId;
         }
         catch (Exception ex)
@@ -576,6 +590,29 @@ public class MongoDbFileStorageService : IFileStorageService
         {
             _logger.LogError(ex, "Error searching similar chunks for file: {FileId}", fileId);
             return new List<DocumentChunk>();
+        }
+    }
+
+    public async Task<bool> UpdateFileChunksAsync(string fileId, List<DocumentChunk> chunks)
+    {
+        try
+        {
+            var filter = Builders<FileDocument>.Filter.Eq(x => x.FileId, fileId);
+            var update = Builders<FileDocument>.Update
+                .Set(x => x.Chunks, chunks)
+                .Set(x => x.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _filesCollection.UpdateOneAsync(filter, update);
+            
+            _logger.LogInformation("Updated file chunks for {FileId}: {ChunkCount} chunks, Modified: {ModifiedCount}", 
+                fileId, chunks.Count, result.ModifiedCount);
+            
+            return result.ModifiedCount > 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating file chunks for {FileId}", fileId);
+            return false;
         }
     }
 

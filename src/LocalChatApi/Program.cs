@@ -2,7 +2,6 @@ using LocalChatApi.Configuration;
 using LocalChatApi.Services;
 using LocalChatApi.Agents;
 using LocalChatApi.Decisions;
-using ElsaWorkflowAgent.Extensions;
 using SemanticKernel.Ollama.Extensions;
 using SemanticKernel.Ollama.Configuration;
 using Microsoft.SemanticKernel;
@@ -17,6 +16,21 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// Add Swagger services
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Add CORS for development
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("DevelopmentCorsPolicy", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
 
 // Configure MongoDB
 builder.Services.Configure<MongoDbSettings>(
@@ -40,18 +54,6 @@ builder.Services.AddSingleton<IMongoDatabase>(serviceProvider =>
         ?? throw new InvalidOperationException("MongoDbSettings not configured");
     return client.GetDatabase(settings.DatabaseName);
 });
-
-// Register services
-builder.Services.AddScoped<IChatHistoryService, MongoDbChatHistoryService>();
-builder.Services.AddScoped<IFileStorageService, MongoDbFileStorageService>();
-builder.Services.AddScoped<IWorkflowOrchestrationService, WorkflowOrchestrationService>();
-builder.Services.AddScoped<IWorkflowOrchestrationService, WorkflowOrchestrationService>();
-
-builder.Services.AddScoped<IWorkflowOrchestrationService, WorkflowOrchestrationService>();
-
-
-// Configure ElsaWorkflowAgent
-builder.Services.AddElsaWorkflowAgent();
 
 // Configure Semantic Kernel with Ollama
 builder.Services.AddSingleton<Kernel>(serviceProvider =>
@@ -81,30 +83,26 @@ builder.Services.AddSingleton<ITextEmbeddingGenerationService>(serviceProvider =
     return kernel.GetRequiredService<ITextEmbeddingGenerationService>();
 });
 
-// Register agents
-builder.Services.AddScoped<IntentDetectionAgent>();
-builder.Services.AddScoped<ChatAgent>();
+// Register application services
+builder.Services.AddScoped<IChatHistoryService, MongoDbChatHistoryService>();
+builder.Services.AddScoped<IFileStorageService, MongoDbFileStorageService>();
+builder.Services.AddScoped<ISimpleWorkflowService, SimpleWorkflowService>();
+builder.Services.AddScoped<IWorkflowOrchestrationService, WorkflowOrchestrationService>();
+
+// Register agents from FileProcessingAgents.cs
 builder.Services.AddScoped<FileUploadAgent>();
 builder.Services.AddScoped<FileReaderAgent>();
 builder.Services.AddScoped<DataExtractionAgent>();
 builder.Services.AddScoped<ChunkingEmbeddingAgent>();
 builder.Services.AddScoped<FileChatAgent>();
 
+// Register agents from IntentDetectionAgent.cs
+builder.Services.AddScoped<IntentDetectionAgent>();
+builder.Services.AddScoped<ChatAgent>();
+
 // Register decisions
 builder.Services.AddScoped<IntentRoutingDecision>();
 builder.Services.AddScoped<FileAvailabilityDecision>();
-
-// Add CORS for development
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll",
-        policy =>
-        {
-            policy.AllowAnyOrigin()
-                  .AllowAnyMethod()
-                  .AllowAnyHeader();
-        });
-});
 
 var app = builder.Build();
 
@@ -112,20 +110,33 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-    app.UseCors("AllowAll");
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "LocalChatApi v1");
+    });
+    
+    // Enable CORS in development
+    app.UseCors("DevelopmentCorsPolicy");
 }
 
-// Serve static files (for demo.html)
+// Enable static files to serve demo.html from wwwroot
 app.UseStaticFiles();
 
-// Configure HTTPS redirection only in production or when HTTPS port is available
-if (!app.Environment.IsDevelopment())
+// Add default file mapping for demo.html
+app.UseDefaultFiles(new DefaultFilesOptions
 {
-    app.UseHttpsRedirection();
-}
+    DefaultFileNames = { "demo.html" }
+});
 
+app.UseHttpsRedirection();
+
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Add a fallback route to serve demo.html for root requests
+app.MapFallbackToFile("demo.html");
 
 app.Run();

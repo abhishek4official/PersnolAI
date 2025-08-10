@@ -4,34 +4,66 @@ using ElsaWorkflowAgent.Kernel;
 using ElsaWorkflowAgent.Agents;
 using ElsaWorkflowAgent.Decisions;
 using ElsaWorkflowAgent.Execution;
+using ElsaWorkflowAgent.Workflows;
+using Elsa.Extensions;
 
 namespace ElsaWorkflowAgent.Extensions;
 
 /// <summary>
-/// Extension methods for configuring ElsaWorkflowAgent services
+/// Extension methods for configuring ElsaWorkflowAgent services with actual Elsa Workflow engine
 /// </summary>
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Add ElsaWorkflowAgent services to the DI container
+    /// Add ElsaWorkflowAgent services with actual Elsa Workflow engine integration
     /// </summary>
     public static IServiceCollection AddElsaWorkflowAgent(this IServiceCollection services, Action<ElsaWorkflowAgentOptions>? configure = null)
     {
         var options = new ElsaWorkflowAgentOptions();
         configure?.Invoke(options);
 
-        // Only register the kernel provider interface, without automatic configuration
+        // Register Elsa Workflow services
+        services.AddElsa(elsa =>
+        {
+            elsa
+                .UseIdentity(identity =>
+                {
+                    identity.TokenLifeSpan = TimeSpan.FromDays(1);
+                    identity.SigningKey = "sufficiently-large-secret-signing-key-for-elsa-workflow-tokens";
+                })
+                .UseDefaultAuthentication()
+                .UseWorkflowManagement(management =>
+                {
+                    management.UseFileSystemWorkflowDefinitionStore("Workflows");
+                })
+                .UseWorkflowRuntime(runtime =>
+                {
+                    runtime.UseDefaultRuntime();
+                })
+                .UseScheduling()
+                .UseCSharp()
+                .UseJavaScript()
+                .UseLiquid()
+                .UseHttp()
+                .UseWorkflowsApi();
+        });
+
+        // Register our custom activities
+        services.AddActivity<AgentActivity<object>>();
+        services.AddActivity<DecisionActivity>();
+
+        // Register kernel provider
         services.AddSingleton<IKernelProvider, SemanticKernelProvider>();
         
-        // Register workflow engine
-        services.AddScoped<IWorkflowEngine, SimpleWorkflowEngine>();
+        // Register workflow engines
+        services.AddScoped<IWorkflowEngine, ElsaWorkflowEngine>();
+        services.AddScoped<IElsaWorkflowEngine, EnhancedElsaWorkflowEngine>();
 
         return services;
     }
 
     /// <summary>
     /// Add Semantic Kernel configuration to the ElsaWorkflowAgent
-    /// Call this separately if you want the default Semantic Kernel setup
     /// </summary>
     public static IServiceCollection AddSemanticKernelConfiguration(this IServiceCollection services, Action<KernelProviderOptions>? configure = null)
     {
@@ -41,7 +73,6 @@ public static class ServiceCollectionExtensions
         }
         else
         {
-            // Default empty configuration - user should configure manually
             services.Configure<KernelProviderOptions>(options => { });
         }
 
@@ -50,7 +81,6 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// Register a custom Semantic Kernel instance
-    /// Use this if you want full control over Semantic Kernel configuration
     /// </summary>
     public static IServiceCollection AddCustomSemanticKernel(this IServiceCollection services, Microsoft.SemanticKernel.Kernel kernel)
     {
@@ -60,7 +90,6 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// Register a custom Semantic Kernel factory
-    /// Use this if you want to create the kernel with access to IServiceProvider
     /// </summary>
     public static IServiceCollection AddCustomSemanticKernel(this IServiceCollection services, Func<IServiceProvider, Microsoft.SemanticKernel.Kernel> kernelFactory)
     {
@@ -136,6 +165,33 @@ public static class ServiceCollectionExtensions
 /// </summary>
 public class ElsaWorkflowAgentOptions
 {
-    // This class is kept for future extensibility
-    // Currently no specific options, but can be extended as needed
+    /// <summary>
+    /// Directory for storing workflow definitions
+    /// </summary>
+    public string WorkflowsDirectory { get; set; } = "Workflows";
+
+    /// <summary>
+    /// Directory for storing workflow templates
+    /// </summary>
+    public string WorkflowTemplatesDirectory { get; set; } = "WorkflowTemplates";
+
+    /// <summary>
+    /// Enable workflow persistence
+    /// </summary>
+    public bool EnablePersistence { get; set; } = true;
+
+    /// <summary>
+    /// Enable workflow scheduling
+    /// </summary>
+    public bool EnableScheduling { get; set; } = true;
+
+    /// <summary>
+    /// Enable HTTP activities
+    /// </summary>
+    public bool EnableHttp { get; set; } = true;
+
+    /// <summary>
+    /// Enable Workflows API
+    /// </summary>
+    public bool EnableApi { get; set; } = false;
 }

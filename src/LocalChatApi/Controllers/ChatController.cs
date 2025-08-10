@@ -258,6 +258,233 @@ public class ChatController : ControllerBase
             });
         }
     }
+
+    #region Workflow Management Endpoints
+
+    /// <summary>
+    /// Get all saved workflows
+    /// </summary>
+    [HttpGet("workflows")]
+    public async Task<ActionResult<ApiResponse<List<string>>>> GetSavedWorkflows()
+    {
+        try
+        {
+            var workflows = await _orchestrationService.GetSavedWorkflowsAsync();
+            return Ok(new ApiResponse<List<string>>
+            {
+                Success = true,
+                Message = "Workflows retrieved successfully",
+                Data = workflows
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving workflows");
+            return StatusCode(500, new ApiResponse<List<string>>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Save a workflow as JSON
+    /// </summary>
+    [HttpPost("workflows/{workflowName}")]
+    public async Task<ActionResult<ApiResponse<bool>>> SaveWorkflow(string workflowName, [FromBody] SaveWorkflowRequest request)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.WorkflowJson))
+            {
+                return BadRequest(new ApiResponse<bool>
+                {
+                    Success = false,
+                    Message = "Workflow JSON cannot be empty",
+                    Errors = new List<string> { "WorkflowJson is required" }
+                });
+            }
+
+            var success = await _orchestrationService.SaveWorkflowAsync(workflowName, request.WorkflowJson);
+
+            return Ok(new ApiResponse<bool>
+            {
+                Success = success,
+                Message = success ? "Workflow saved successfully" : "Failed to save workflow",
+                Data = success
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving workflow: {WorkflowName}", workflowName);
+            return StatusCode(500, new ApiResponse<bool>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Load a workflow as JSON
+    /// </summary>
+    [HttpGet("workflows/{workflowName}")]
+    public async Task<ActionResult<ApiResponse<string>>> LoadWorkflow(string workflowName)
+    {
+        try
+        {
+            var workflowJson = await _orchestrationService.LoadWorkflowAsync(workflowName);
+
+            if (workflowJson == null)
+            {
+                return NotFound(new ApiResponse<string>
+                {
+                    Success = false,
+                    Message = "Workflow not found",
+                    Errors = new List<string> { $"Workflow '{workflowName}' does not exist" }
+                });
+            }
+
+            return Ok(new ApiResponse<string>
+            {
+                Success = true,
+                Message = "Workflow loaded successfully",
+                Data = workflowJson
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error loading workflow: {WorkflowName}", workflowName);
+            return StatusCode(500, new ApiResponse<string>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Delete a saved workflow
+    /// </summary>
+    [HttpDelete("workflows/{workflowName}")]
+    public async Task<ActionResult<ApiResponse<bool>>> DeleteWorkflow(string workflowName)
+    {
+        try
+        {
+            var success = await _orchestrationService.DeleteWorkflowAsync(workflowName);
+
+            if (!success)
+            {
+                return NotFound(new ApiResponse<bool>
+                {
+                    Success = false,
+                    Message = "Workflow not found",
+                    Errors = new List<string> { $"Workflow '{workflowName}' does not exist" }
+                });
+            }
+
+            return Ok(new ApiResponse<bool>
+            {
+                Success = true,
+                Message = "Workflow deleted successfully",
+                Data = true
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting workflow: {WorkflowName}", workflowName);
+            return StatusCode(500, new ApiResponse<bool>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Export a workflow as JSON
+    /// </summary>
+    [HttpGet("workflows/{workflowName}/export")]
+    public async Task<ActionResult<ApiResponse<string>>> ExportWorkflow(string workflowName)
+    {
+        try
+        {
+            var workflowJson = await _orchestrationService.ExportWorkflowAsync(workflowName);
+
+            if (workflowJson == null)
+            {
+                return NotFound(new ApiResponse<string>
+                {
+                    Success = false,
+                    Message = "Workflow not found",
+                    Errors = new List<string> { $"Workflow '{workflowName}' does not exist" }
+                });
+            }
+
+            return Ok(new ApiResponse<string>
+            {
+                Success = true,
+                Message = "Workflow exported successfully",
+                Data = workflowJson
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error exporting workflow: {WorkflowName}", workflowName);
+            return StatusCode(500, new ApiResponse<string>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    /// <summary>
+    /// Import a workflow from JSON
+    /// </summary>
+    [HttpPost("workflows/{workflowName}/import")]
+    public async Task<ActionResult<ApiResponse<bool>>> ImportWorkflow(string workflowName, [FromBody] ImportWorkflowRequest request)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.WorkflowJson))
+            {
+                return BadRequest(new ApiResponse<bool>
+                {
+                    Success = false,
+                    Message = "Workflow JSON cannot be empty",
+                    Errors = new List<string> { "WorkflowJson is required" }
+                });
+            }
+
+            var success = await _orchestrationService.ImportWorkflowAsync(workflowName, request.WorkflowJson);
+
+            return Ok(new ApiResponse<bool>
+            {
+                Success = success,
+                Message = success ? "Workflow imported successfully" : "Failed to import workflow",
+                Data = success
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error importing workflow: {WorkflowName}", workflowName);
+            return StatusCode(500, new ApiResponse<bool>
+            {
+                Success = false,
+                Message = "Internal server error",
+                Errors = new List<string> { ex.Message }
+            });
+        }
+    }
+
+    #endregion
 }
 
 /// <summary>
@@ -267,4 +494,20 @@ public class CreateSessionRequest
 {
     public string? UserId { get; set; }
     public string? Title { get; set; }
+}
+
+/// <summary>
+/// Request model for saving a workflow
+/// </summary>
+public class SaveWorkflowRequest
+{
+    public string WorkflowJson { get; set; } = "";
+}
+
+/// <summary>
+/// Request model for importing a workflow
+/// </summary>
+public class ImportWorkflowRequest
+{
+    public string WorkflowJson { get; set; } = "";
 }

@@ -1,75 +1,51 @@
 ﻿using LocalChatApi.Models;
-using LocalChatApi.Agents;
-using LocalChatApi.Decisions;
 using LocalChatApi.Services;
-using ElsaWorkflowAgent.Workflows;
-using ElsaWorkflowAgent.Execution;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel.Embeddings;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LocalChatApi.Services;
 
 /// <summary>
-/// Interface for workflow orchestration service
+/// Interface for workflow orchestration service using simplified workflows
 /// </summary>
 public interface IWorkflowOrchestrationService
 {
     Task<ChatResponse> ProcessUserRequestAsync(UserRequest request);
     Task<FileProcessingResult> ProcessFileUploadAsync(FileUploadRequest request);
     Task<string> ProcessFileChatAsync(FileChatRequest request);
+    
+    // Workflow management methods
+    Task<bool> SaveWorkflowAsync(string workflowName, string workflowJson);
+    Task<string?> LoadWorkflowAsync(string workflowName);
+    Task<List<string>> GetSavedWorkflowsAsync();
+    Task<bool> DeleteWorkflowAsync(string workflowName);
+    Task<string?> ExportWorkflowAsync(string workflowName);
+    Task<bool> ImportWorkflowAsync(string workflowName, string json);
 }
 
 /// <summary>
-/// Main workflow orchestration service that coordinates all agents and workflows
+/// Main workflow orchestration service using simplified workflows
 /// </summary>
 public class WorkflowOrchestrationService : IWorkflowOrchestrationService
 {
     private readonly ILogger<WorkflowOrchestrationService> _logger;
-    private readonly IWorkflowEngine _workflowEngine;
+    private readonly ISimpleWorkflowService _workflowService;
     private readonly IChatHistoryService _chatHistoryService;
     private readonly IFileStorageService _fileStorageService;
-    
-    // Agents
-    private readonly IntentDetectionAgent _intentDetectionAgent;
-    private readonly ChatAgent _chatAgent;
-    private readonly FileUploadAgent _fileUploadAgent;
-    private readonly FileReaderAgent _fileReaderAgent;
-    private readonly DataExtractionAgent _dataExtractionAgent;
-    private readonly ChunkingEmbeddingAgent _chunkingEmbeddingAgent;
-    private readonly FileChatAgent _fileChatAgent;
-    
-    // Decisions
-    private readonly IntentRoutingDecision _intentRoutingDecision;
-    private readonly FileAvailabilityDecision _fileAvailabilityDecision;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
 
     public WorkflowOrchestrationService(
         ILogger<WorkflowOrchestrationService> logger,
-        IWorkflowEngine workflowEngine,
+        ISimpleWorkflowService workflowService,
         IChatHistoryService chatHistoryService,
         IFileStorageService fileStorageService,
-        IntentDetectionAgent intentDetectionAgent,
-        ChatAgent chatAgent,
-        FileUploadAgent fileUploadAgent,
-        FileReaderAgent fileReaderAgent,
-        DataExtractionAgent dataExtractionAgent,
-        ChunkingEmbeddingAgent chunkingEmbeddingAgent,
-        FileChatAgent fileChatAgent,
-        IntentRoutingDecision intentRoutingDecision,
-        FileAvailabilityDecision fileAvailabilityDecision)
+        IServiceScopeFactory serviceScopeFactory)
     {
         _logger = logger;
-        _workflowEngine = workflowEngine;
+        _workflowService = workflowService;
         _chatHistoryService = chatHistoryService;
         _fileStorageService = fileStorageService;
-        _intentDetectionAgent = intentDetectionAgent;
-        _chatAgent = chatAgent;
-        _fileUploadAgent = fileUploadAgent;
-        _fileReaderAgent = fileReaderAgent;
-        _dataExtractionAgent = dataExtractionAgent;
-        _chunkingEmbeddingAgent = chunkingEmbeddingAgent;
-        _fileChatAgent = fileChatAgent;
-        _intentRoutingDecision = intentRoutingDecision;
-        _fileAvailabilityDecision = fileAvailabilityDecision;
+        _serviceScopeFactory = serviceScopeFactory;
     }
 
     public async Task<ChatResponse> ProcessUserRequestAsync(UserRequest request)
@@ -81,41 +57,28 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
             // Ensure session exists
             await EnsureSessionExists(request.SessionId);
 
-            // Create intent detection workflow
-            var workflow = WorkflowBuilderFactory
-                .CreateBuilder("IntentDetectionWorkflow", "Main intent detection and routing workflow")
-                .WithVariable("userRequest", request)
-                .AddAgent(_intentDetectionAgent, request)
-                .AddDecision(_intentRoutingDecision, "routing_input") // Will use result from previous step
-                .Build();
+            // Execute intent detection workflow
+            var intentWorkflowResult = await _workflowService.ExecuteIntentDetectionWorkflowAsync(request);
 
-            var workflowResult = await _workflowEngine.ExecuteAsync(workflow, request);
-
-            if (!workflowResult.Success)
+            if (!intentWorkflowResult.Success)
             {
                 return new ChatResponse
                 {
                     Response = "I apologize, but I encountered an error processing your request.",
                     Intent = "error",
                     SessionId = request.SessionId,
-                    Metadata = new Dictionary<string, object> { ["error"] = workflowResult.ErrorMessage ?? "Unknown error" }
+                    Metadata = new Dictionary<string, object> { ["error"] = intentWorkflowResult.ErrorMessage ?? "Unknown error" }
                 };
             }
 
-            // Extract intent result from workflow
-            var intentResult = workflowResult.StepResults.FirstOrDefault()?.Result as IntentResult;
-            if (intentResult == null)
-            {
-                return new ChatResponse
-                {
-                    Response = "I couldn't determine your intent. Could you please rephrase your request?",
-                    Intent = "unknown",
-                    SessionId = request.SessionId
-                };
-            }
-
-            // Route to appropriate sub-workflow based on intent
+            // Extract intent from workflow result
+            var intentResult = ExtractIntentFromWorkflowResult(intentWorkflowResult);
+            
+            // Route based on intent
             var response = await RouteToWorkflow(intentResult, request);
+            
+            // Save chat history
+            await SaveChatHistory(request, response, intentResult.Intent);
             
             return new ChatResponse
             {
@@ -150,25 +113,19 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
             // Ensure session exists
             await EnsureSessionExists(request.SessionId);
 
-            // Create file upload workflow
-            var workflow = WorkflowBuilderFactory
-                .CreateBuilder("FileUploadWorkflow", "File upload and processing workflow")
-                .WithVariable("fileRequest", request)
-                .AddAgent(_fileUploadAgent, request)
-                .Build();
-
-            var workflowResult = await _workflowEngine.ExecuteAsync(workflow, request);
+            // Execute file upload workflow
+            var workflowResult = await _workflowService.ExecuteFileUploadWorkflowAsync(request);
 
             if (!workflowResult.Success)
             {
                 return new FileProcessingResult
                 {
                     Success = false,
-                    Message = workflowResult.ErrorMessage ?? "File upload failed"
+                    Message = workflowResult.ErrorMessage ?? "File upload workflow failed"
                 };
             }
 
-            var uploadResult = workflowResult.FinalResult as FileProcessingResult;
+            var uploadResult = ExtractFileProcessingResultFromWorkflowResult(workflowResult);
             if (uploadResult == null || !uploadResult.Success)
             {
                 return new FileProcessingResult
@@ -178,8 +135,13 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
                 };
             }
 
-            // Start background processing workflow
-            _ = Task.Run(async () => await ProcessFileInBackground(uploadResult.FileId));
+            // Start background processing with proper scoping
+            _ = Task.Run(async () =>
+            {
+                // Add a small delay to ensure the HTTP response is sent first
+                await Task.Delay(100);
+                await ProcessFileInBackground(uploadResult.FileId);
+            });
 
             return uploadResult;
         }
@@ -204,22 +166,20 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
             // Ensure session exists
             await EnsureSessionExists(request.SessionId);
 
-            // Create file chat workflow with availability check
-            var workflow = WorkflowBuilderFactory
-                .CreateBuilder("FileChatWorkflow", "File chat workflow with availability check")
-                .WithVariable("chatRequest", request)
-                .AddDecision(_fileAvailabilityDecision, request)
-                .AddAgent(_fileChatAgent, request)
-                .Build();
-
-            var workflowResult = await _workflowEngine.ExecuteAsync(workflow, request);
+            // Execute file chat workflow
+            var workflowResult = await _workflowService.ExecuteFileChatWorkflowAsync(request);
 
             if (!workflowResult.Success)
             {
                 return workflowResult.ErrorMessage ?? "I encountered an error processing your file chat request.";
             }
 
-            return workflowResult.FinalResult as string ?? "I couldn't generate a response to your question.";
+            var response = ExtractStringResultFromWorkflowResult(workflowResult) ?? "I couldn't generate a response to your question.";
+            
+            // Save file chat history
+            await SaveFileChatHistory(request, response);
+            
+            return response;
         }
         catch (Exception ex)
         {
@@ -228,6 +188,78 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
         }
     }
 
+    // Workflow management methods
+    public async Task<bool> SaveWorkflowAsync(string workflowName, string workflowJson)
+    {
+        try
+        {
+            return await _workflowService.ImportWorkflowAsync(workflowName, workflowJson);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving workflow: {WorkflowName}", workflowName);
+            return false;
+        }
+    }
+
+    public async Task<string?> LoadWorkflowAsync(string workflowName)
+    {
+        try
+        {
+            return await _workflowService.ExportWorkflowAsync(workflowName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error loading workflow: {WorkflowName}", workflowName);
+            return null;
+        }
+    }
+
+    public async Task<List<string>> GetSavedWorkflowsAsync()
+    {
+        return await _workflowService.GetSavedWorkflowsAsync();
+    }
+
+    public async Task<bool> DeleteWorkflowAsync(string workflowName)
+    {
+        try
+        {
+            var workflows = await _workflowService.GetSavedWorkflowsAsync();
+            if (workflows.Contains(workflowName))
+            {
+                // Delete the file
+                var workflowsDirectory = "SimpleWorkflows";
+                var fileName = $"{SanitizeFileName(workflowName)}.json";
+                var filePath = Path.Combine(workflowsDirectory, fileName);
+                
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                    _logger.LogInformation("Deleted workflow: {WorkflowName}", workflowName);
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting workflow: {WorkflowName}", workflowName);
+            return false;
+        }
+    }
+
+    public async Task<string?> ExportWorkflowAsync(string workflowName)
+    {
+        return await _workflowService.ExportWorkflowAsync(workflowName);
+    }
+
+    public async Task<bool> ImportWorkflowAsync(string workflowName, string json)
+    {
+        return await _workflowService.ImportWorkflowAsync(workflowName, json);
+    }
+
+    // Private helper methods
     private async Task<string> RouteToWorkflow(IntentResult intentResult, UserRequest request)
     {
         return intentResult.Intent.ToLowerInvariant() switch
@@ -241,14 +273,8 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
 
     private async Task<string> ExecuteChatWorkflow(UserRequest request)
     {
-        var workflow = WorkflowBuilderFactory
-            .CreateBuilder("ChatWorkflow", "Normal chat conversation workflow")
-            .WithVariable("userRequest", request)
-            .AddAgent(_chatAgent, request)
-            .Build();
-
-        var result = await _workflowEngine.ExecuteAsync(workflow, request);
-        return result.FinalResult as string ?? "I couldn't generate a response.";
+        var workflowResult = await _workflowService.ExecuteChatWorkflowAsync(request);
+        return ExtractStringResultFromWorkflowResult(workflowResult) ?? "I couldn't generate a response.";
     }
 
     private async Task<string> HandleFileChatIntent(IntentResult intentResult, UserRequest request)
@@ -277,35 +303,45 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
         {
             _logger.LogInformation("Starting background processing for file: {FileId}", fileId);
 
-            var fileDoc = await _fileStorageService.GetFileAsync(fileId);
+            // Create a new service scope for background processing
+            using var scope = _serviceScopeFactory.CreateScope();
+            var scopedFileStorageService = scope.ServiceProvider.GetRequiredService<IFileStorageService>();
+            var scopedWorkflowService = scope.ServiceProvider.GetRequiredService<ISimpleWorkflowService>();
+
+            var fileDoc = await scopedFileStorageService.GetFileAsync(fileId);
             if (fileDoc == null)
             {
                 _logger.LogError("File not found for background processing: {FileId}", fileId);
                 return;
             }
 
-            // 🔥 NEW: Enhanced file processing workflow with proper data flow
-            var workflow = WorkflowBuilderFactory
-                .CreateBuilder("FileProcessingWorkflow", "Background file processing workflow")
-                .WithVariable("fileDoc", fileDoc)
-                .AddAgent(_fileReaderAgent, fileDoc)                                                    // Step 1: Read file content
-                .AddAgentWithPreviousResult(_dataExtractionAgent)                                       // Step 2: x => x (previous result)
-                .AddAgentWithTransform(_chunkingEmbeddingAgent, content => new Dictionary<string, object>
-                { 
-                    ["fileId"] = fileDoc.FileId, 
-                    ["content"] = (string)content 
-                })                         // Step 3: x => transform(x)
-                .Build();
+            // Execute the complete file processing workflow with scoped services
+            _logger.LogInformation("Starting file processing workflow for: {FileId}", fileId);
+            var workflowResult = await scopedWorkflowService.ExecuteFileProcessingWorkflowAsync(fileId);
 
-            var result = await _workflowEngine.ExecuteAsync(workflow, fileDoc);
-
-            if (result.Success)
+            if (workflowResult.Success)
             {
-                _logger.LogInformation("Background file processing completed for: {FileId}", fileId);
+                _logger.LogInformation("File processing workflow completed successfully for: {FileId} in {StepCount} steps", 
+                    fileId, workflowResult.StepResults.Count);
+
+                // Log step details
+                foreach (var step in workflowResult.StepResults)
+                {
+                    _logger.LogInformation("Step '{StepName}' completed in {ExecutionTime}ms - Success: {Success}", 
+                        step.StepName, step.ExecutionTime.TotalMilliseconds, step.Success);
+                }
+
+                // Extract chunk count from final result if available
+                if (workflowResult.FinalResult is List<DocumentChunk> chunks)
+                {
+                    _logger.LogInformation("File processing completed with {ChunkCount} chunks created for file: {FileId}", 
+                        chunks.Count, fileId);
+                }
             }
             else
             {
-                _logger.LogError("Background file processing failed for {FileId}: {Error}", fileId, result.ErrorMessage);
+                _logger.LogError("File processing workflow failed for: {FileId}. Error: {ErrorMessage}", 
+                    fileId, workflowResult.ErrorMessage);
             }
         }
         catch (Exception ex)
@@ -324,5 +360,116 @@ public class WorkflowOrchestrationService : IWorkflowOrchestrationService
         {
             await _chatHistoryService.CreateSessionAsync("default_user", $"Session {sessionId}");
         }
+    }
+
+    private async Task SaveChatHistory(UserRequest request, string response, string intent)
+    {
+        try
+        {
+            // Save user message
+            await _chatHistoryService.SaveMessageAsync(new ChatMessage
+            {
+                SessionId = request.SessionId,
+                Role = "user",
+                Content = request.Input,
+                Timestamp = DateTime.UtcNow,
+                Intent = intent
+            });
+
+            // Save assistant response
+            await _chatHistoryService.SaveMessageAsync(new ChatMessage
+            {
+                SessionId = request.SessionId,
+                Role = "assistant",
+                Content = response,
+                Timestamp = DateTime.UtcNow,
+                Intent = intent
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving chat history for session: {SessionId}", request.SessionId);
+        }
+    }
+
+    private async Task SaveFileChatHistory(FileChatRequest request, string response)
+    {
+        try
+        {
+            // Save user question
+            await _chatHistoryService.SaveMessageAsync(new ChatMessage
+            {
+                SessionId = request.SessionId,
+                Role = "user",
+                Content = $"[File: {request.FileId}] {request.Question}",
+                Timestamp = DateTime.UtcNow,
+                Intent = "file_chat"
+            });
+
+            // Save assistant response
+            await _chatHistoryService.SaveMessageAsync(new ChatMessage
+            {
+                SessionId = request.SessionId,
+                Role = "assistant",
+                Content = response,
+                Timestamp = DateTime.UtcNow,
+                Intent = "file_chat"
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving file chat history for session: {SessionId}", request.SessionId);
+        }
+    }
+
+    // Helper methods to extract results from workflow results
+    private IntentResult ExtractIntentFromWorkflowResult(SimpleWorkflowResult workflowResult)
+    {
+        // Extract intent from the first step result (intent detection)
+        var intentStep = workflowResult.StepResults.FirstOrDefault(s => s.StepName.Contains("Intent"));
+        
+        if (intentStep?.Result is IntentResult intentResult)
+        {
+            return intentResult;
+        }
+
+        // Default intent if extraction fails
+        return new IntentResult
+        {
+            Intent = "chat",
+            Confidence = 0.8,
+            Entities = new Dictionary<string, object>(),
+            OriginalInput = ""
+        };
+    }
+
+    private string? ExtractStringResultFromWorkflowResult(SimpleWorkflowResult workflowResult)
+    {
+        // Get the final result or the last successful step result
+        if (workflowResult.FinalResult is string stringResult)
+        {
+            return stringResult;
+        }
+
+        var lastStep = workflowResult.StepResults.LastOrDefault(s => s.Success);
+        return lastStep?.Result as string;
+    }
+
+    private FileProcessingResult? ExtractFileProcessingResultFromWorkflowResult(SimpleWorkflowResult workflowResult)
+    {
+        // Extract file processing result
+        if (workflowResult.FinalResult is FileProcessingResult fileResult)
+        {
+            return fileResult;
+        }
+
+        var uploadStep = workflowResult.StepResults.FirstOrDefault(s => s.StepName.Contains("Upload"));
+        return uploadStep?.Result as FileProcessingResult;
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        return string.Join("_", fileName.Split(invalidChars, StringSplitOptions.RemoveEmptyEntries));
     }
 }

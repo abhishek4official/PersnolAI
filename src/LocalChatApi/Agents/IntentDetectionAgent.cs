@@ -1,8 +1,8 @@
-using ElsaWorkflowAgent.Agents;
-using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using LocalChatApi.Models;
-using System.Text.Json;
+using LocalChatApi.Core;
+using LocalChatApi.Services;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace LocalChatApi.Agents;
 
@@ -16,145 +16,126 @@ public class IntentDetectionAgent : BaseAgent<IntentResult>
     {
     }
 
-    public override string Id => "intent-detection-agent";
-    public override string Name => "Intent Detection Agent";
-    public override string Description => "Analyzes user input to determine intent and route to appropriate workflow";
-
-    public override AgentMetadata Metadata => new()
+    public override AgentMetadata Metadata => new AgentMetadata
     {
-        Id = Id,
-        Name = Name,
-        Description = Description,
+        Id = "intent-detection-agent",
+        Name = "Intent Detection Agent",
+        Description = "Analyzes user input to determine intent and route to appropriate workflow",
+        Version = "1.0.0",
         InputType = typeof(UserRequest),
         OutputType = typeof(IntentResult)
     };
 
     protected override async Task<IntentResult> ExecuteInternalAsync(object input, AgentContext context, CancellationToken cancellationToken)
     {
-        var userRequest = input as UserRequest ?? throw new ArgumentException("Input must be UserRequest");
+        if (input is not UserRequest userRequest)
+        {
+            throw new ArgumentException("Input must be a UserRequest", nameof(input));
+        }
+
+        var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
+
+        var prompt = $@"
+Analyze this user input and determine the intent. Respond with just one word:
+- 'chat' for normal conversation
+- 'file_upload' if asking about uploading files
+- 'file_chat' if asking questions about a specific file
+
+User input: ""{userRequest.Input}""
+
+Intent:";
+
+        var response = await chatCompletionService.GetChatMessageContentAsync(prompt, cancellationToken: cancellationToken);
+
+        var intent = response.Content?.Trim().ToLowerInvariant() ?? "chat";
+
+        // Simple intent detection logic
+        if (userRequest.Input.ToLowerInvariant().Contains("upload"))
+        {
+            intent = "file_upload";
+        }
+        else if (userRequest.Input.ToLowerInvariant().Contains("file") && 
+                 (userRequest.Input.ToLowerInvariant().Contains("what") || 
+                  userRequest.Input.ToLowerInvariant().Contains("about")))
+        {
+            intent = "file_chat";
+        }
+        else
+        {
+            intent = "chat";
+        }
+
+        return new IntentResult
+        {
+            Intent = intent,
+            Confidence = 0.8,
+            Entities = new Dictionary<string, object>(),
+            OriginalInput = userRequest.Input
+        };
+    }
+}
+
+/// <summary>
+/// Chat agent that handles normal conversation using Semantic Kernel with Ollama
+/// </summary>
+public class ChatAgent : BaseAgent<string>
+{
+    private readonly IChatHistoryService _chatHistoryService;
+
+    public ChatAgent(ILogger<ChatAgent> logger, Kernel kernel, IChatHistoryService chatHistoryService)
+        : base(logger, kernel)
+    {
+        _chatHistoryService = chatHistoryService;
+    }
+
+    public override AgentMetadata Metadata => new AgentMetadata
+    {
+        Id = "chat-agent",
+        Name = "Chat Agent",
+        Description = "Handles normal conversation using Semantic Kernel with Ollama",
+        Version = "1.0.0",
+        InputType = typeof(UserRequest),
+        OutputType = typeof(string)
+    };
+
+    protected override async Task<string> ExecuteInternalAsync(object input, AgentContext context, CancellationToken cancellationToken)
+    {
+        if (input is not UserRequest userRequest)
+        {
+            throw new ArgumentException("Input must be a UserRequest", nameof(input));
+        }
+
+        var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
+
+        // Get recent chat history for context
+        var recentMessages = await _chatHistoryService.GetSessionMessagesAsync(userRequest.SessionId, 10);
+        var conversationContext = BuildConversationContext(recentMessages.ToList(), userRequest.Input);
+
+        var response = await chatCompletionService.GetChatMessageContentAsync(
+            conversationContext, 
+            cancellationToken: cancellationToken);
+
+        var responseText = response.Content ?? "I'm sorry, I couldn't generate a response.";
+
+        // Save chat history will be handled by the orchestration service
+        return responseText;
+    }
+
+    private string BuildConversationContext(List<ChatMessage> recentMessages, string currentInput)
+    {
+        var context = "You are a helpful AI assistant. Have a natural conversation with the user.\n\n";
         
-        Logger.LogInformation("Analyzing intent for input: {Input}", userRequest.Input);
-
-        // Create prompt for intent detection
-        var prompt = $$"""
-            Analyze the following user input and determine the intent. Return only the intent classification:
-
-            User Input: "{{userRequest.Input}}"
-
-            Intent Categories:
-            1. "chat" - Normal conversation, questions, general queries
-            2. "file_upload" - User wants to upload a file, mentions uploading, attaching, or sharing files
-            3. "file_chat" - User is asking questions about a previously uploaded file, mentions file ID, or asks about file content
-
-            Additional Context:
-            - Look for keywords like "upload", "attach", "file", "document"
-            - Look for file ID references (like "XXXXX" or alphanumeric IDs)
-            - Look for questions about file content or analysis
-
-            Return a JSON response with this exact format:
-            {
-                "intent": "chat|file_upload|file_chat",
-                "confidence": 0.0-1.0,
-                "entities": {
-                    "file_id": "extracted_file_id_if_any",
-                    "keywords": ["relevant", "keywords"]
-                }
-            }
-            """;
-
-        try
+        if (recentMessages.Any())
         {
-            var result = await _kernel.InvokePromptAsync(prompt, cancellationToken: cancellationToken);
-            var responseText = result.GetValue<string>() ?? "";
-
-            Logger.LogInformation("LLM Response: {Response}", responseText);
-
-            // Parse the JSON response
-            var intentData = JsonSerializer.Deserialize<JsonElement>(responseText);
-            
-            var intent = intentData.GetProperty("intent").GetString() ?? "chat";
-            var confidence = intentData.GetProperty("confidence").GetDouble();
-            
-            var entities = new Dictionary<string, object>();
-            if (intentData.TryGetProperty("entities", out var entitiesElement))
+            context += "Recent conversation:\n";
+            foreach (var message in recentMessages.TakeLast(5))
             {
-                if (entitiesElement.TryGetProperty("file_id", out var fileIdElement))
-                {
-                    var fileId = fileIdElement.GetString();
-                    if (!string.IsNullOrEmpty(fileId))
-                        entities["file_id"] = fileId;
-                }
-                
-                if (entitiesElement.TryGetProperty("keywords", out var keywordsElement))
-                {
-                    var keywords = keywordsElement.EnumerateArray()
-                        .Select(k => k.GetString() ?? "")
-                        .Where(k => !string.IsNullOrEmpty(k))
-                        .ToList();
-                    entities["keywords"] = keywords;
-                }
+                context += $"{message.Role}: {message.Content}\n";
             }
-
-            var intentResult = new IntentResult
-            {
-                Intent = intent,
-                Confidence = confidence,
-                Entities = entities,
-                OriginalInput = userRequest.Input
-            };
-
-            Logger.LogInformation("Intent detected: {Intent} with confidence {Confidence}", intent, confidence);
-            return intentResult;
+            context += "\n";
         }
-        catch (JsonException ex)
-        {
-            Logger.LogWarning(ex, "Failed to parse LLM response as JSON, falling back to simple classification");
-            
-            // Fallback: Simple keyword-based classification
-            var inputLower = userRequest.Input.ToLowerInvariant();
-            
-            if (inputLower.Contains("upload") || inputLower.Contains("attach") || inputLower.Contains("file"))
-            {
-                return new IntentResult
-                {
-                    Intent = "file_upload",
-                    Confidence = 0.7,
-                    Entities = new Dictionary<string, object> { ["keywords"] = new[] { "file", "upload" } },
-                    OriginalInput = userRequest.Input
-                };
-            }
-            
-            if (inputLower.Contains("file id") || System.Text.RegularExpressions.Regex.IsMatch(inputLower, @"\b[a-f0-9]{8,}\b"))
-            {
-                return new IntentResult
-                {
-                    Intent = "file_chat",
-                    Confidence = 0.6,
-                    Entities = new Dictionary<string, object>(),
-                    OriginalInput = userRequest.Input
-                };
-            }
 
-            return new IntentResult
-            {
-                Intent = "chat",
-                Confidence = 0.8,
-                Entities = new Dictionary<string, object>(),
-                OriginalInput = userRequest.Input
-            };
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error during intent detection");
-            
-            // Default to chat intent on error
-            return new IntentResult
-            {
-                Intent = "chat",
-                Confidence = 0.5,
-                Entities = new Dictionary<string, object>(),
-                OriginalInput = userRequest.Input
-            };
-        }
+        context += $"User: {currentInput}\nAssistant:";
+        return context;
     }
 }
